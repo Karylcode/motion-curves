@@ -14,8 +14,10 @@ let viewer;
 
 // 每次跟伺服器確認（cache: no-cache）：重新匯出的動作不會讀到舊檔。
 // 動作數據有先壓好的 .gz（build-index.mjs 產生），Tailscale 不會自動壓縮，下載 .gz 自己解壓只要 1/4～1/5 的流量
+// GitHub Pages 版沒有 .gz（Pages 自己會壓縮），不用先試
+const TRY_GZ = import.meta.env.MODE !== 'pages';
 async function loadJSON(url) {
-  if (typeof DecompressionStream !== 'undefined' && url.startsWith('motions/')) {
+  if (TRY_GZ && typeof DecompressionStream !== 'undefined' && url.startsWith('motions/')) {
     const gz = await fetch(`${url}.gz`, { cache: 'no-cache' }).catch(() => null);
     if (gz?.ok && !/text\/html/.test(gz.headers.get('content-type') ?? '')) {  // Vite 開發伺服器找不到檔案時會回 index.html（200），不能當成 .gz
       if (/gzip/.test(gz.headers.get('content-encoding') ?? '')) return gz.json();  // 伺服器自己標了 gzip，瀏覽器已經解開

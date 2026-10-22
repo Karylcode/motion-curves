@@ -18,7 +18,7 @@ export const VIEW_NAMES = Object.entries(VIEWS).map(([id, v]) => ({ id, label: v
 const UP = new THREE.Vector3(0, 1, 0);
 
 // 模型檔有壓好的 .gz（build-index.mjs 產生，目前只有角色檔）就下載 .gz 自己解壓，Tailscale 不會自動壓縮
-async function fetchModel(url, tryGz = true) {
+async function fetchModel(url, tryGz = import.meta.env.MODE !== 'pages') {  // GitHub Pages 版沒有 .gz
   if (tryGz && typeof DecompressionStream !== 'undefined') {
     const gz = await fetch(`${url}.gz`).catch(() => null);
     if (gz?.ok && !/text\/html/.test(gz.headers.get('content-type') ?? '')) {  // Vite 開發伺服器找不到檔案時會回 index.html（200），不能當成 .gz
