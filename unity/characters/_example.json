@@ -1,0 +1,15 @@
+{
+  "character": "My_Character",
+  "weapon": "單手劍",
+  "prefab": "Assets/Characters/AvatarSample_A/AvatarSample_A_Sword.prefab",
+  "sourcePrefab": "Assets/SomePack/My_Character/Prefab/My_Character.prefab",
+  "weapons": [
+    { "object": "Weapon_Sword", "socket": "Hand_R_Socket", "model": "models/sword.glb", "tip": [0, 0, 1.0], "base": [0, 0, -0.22] }
+  ],
+  "animators": [],
+  "motions": [
+    { "id": "MC_Idle", "file": "Assets/SomePack/My_Character/Animations/Idle.fbx", "category": "待機" },
+    { "id": "MC_Walk", "file": "Assets/SomePack/My_Character/Animations/Walk.fbx", "category": "走路" }
+  ],
+  "notes": "範本：複製成 <名稱>.json（不要 _ 開頭）再改。格式見 HOWTO.md。"
+}

@@ -1,0 +1,87 @@
+// 只用 curves.json 在 Unity 重建 Humanoid 動作片段，並跟原檔的實際播放比對。
+// 用法：用 run_export.cs.txt 跑（script 改成這個檔），改下面的設定。
+// mode 留空＝每條曲線照 curves.json 裡自己的 playback（dense＝每格一個值、格與格之間直線；curve＝照關鍵影格和切線），跟 Unity 實際播放原檔一樣。
+//      填 "dense" 或 "curve"＝全部曲線都用那一種（比較用）。
+// saveDir 有填就把重建的片段存成 <saveDir>/<id>.anim；compare 為 true 就跟原檔（curves.json 的 sourceFile）比：
+//      AvatarSample_A 身上，開 Foot IK＋Root 移動，連續播 4 遍、每 1/120 秒比一次所有骨頭和角色位置。
+string motionsDir = System.IO.Path.Combine(MOTION_CURVES_ROOT, "public", "motions");  // MOTION_CURVES_ROOT 由 run_export.cs.txt 換成這個倉庫的資料夾
+string[] pick = { "S_Walk" };  // 要重建的 id；null＝motionsDir 底下全部
+string[] pickPrefix = null;  // 或只重建 id 開頭是這些的（例如 { "K_", "TK_" }）；null＝不限
+string reportFile = "";  // 有填就把每支的結果一行一行附加到這個檔（一次跑很多支、execute_code 逾時也看得到結果）
+string mode = "";
+string saveDir = "";   // 例如 "Assets/Rebuilt"
+bool compare = true;
+string character = "Assets/Characters/AvatarSample_A/AvatarSample_A.vrm";
+
+System.Func<Newtonsoft.Json.Linq.JToken, float> num = t => t.Type == Newtonsoft.Json.Linq.JTokenType.String ? ((string)t == "Infinity" ? float.PositiveInfinity : float.NegativeInfinity) : (float)t;
+var ids = new System.Collections.Generic.List<string>();
+if (pick != null) ids.AddRange(pick);
+else foreach (var d in System.IO.Directory.GetDirectories(motionsDir)) if (System.IO.File.Exists(System.IO.Path.Combine(d, "curves.json"))) ids.Add(System.IO.Path.GetFileName(d));
+if (pickPrefix != null) ids.RemoveAll(x => !System.Array.Exists(pickPrefix, pf => x.StartsWith(pf)));
+var log = new System.Text.StringBuilder();
+
+foreach (var id in ids) {
+var root = Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(System.IO.Path.Combine(motionsDir, id, "curves.json"), System.Text.Encoding.UTF8));
+float fr = (float)root["frameRate"];
+var rebuilt = new AnimationClip(); rebuilt.name = (string)root["name"]; rebuilt.frameRate = fr;
+int denseCount = 0;
+foreach (var c in root["curves"]) {
+  string m = mode != "" ? mode : (string)c["playback"] ?? (string)root["playbackMode"] ?? "curve";
+  AnimationCurve cv;
+  if (m == "dense") {
+    denseCount++;
+    var vals = (Newtonsoft.Json.Linq.JArray)c["frameValues"]; var keys = new Keyframe[vals.Count];
+    for (int f = 0; f < keys.Length; f++) keys[f] = new Keyframe(f / fr, (float)vals[f]);
+    cv = new AnimationCurve(keys);
+    for (int f = 0; f < keys.Length; f++) { AnimationUtility.SetKeyLeftTangentMode(cv, f, AnimationUtility.TangentMode.Linear); AnimationUtility.SetKeyRightTangentMode(cv, f, AnimationUtility.TangentMode.Linear); }
+  } else {
+    var keysJ = (Newtonsoft.Json.Linq.JArray)c["keys"]; var keys = new Keyframe[keysJ.Count];
+    for (int i = 0; i < keys.Length; i++) { var k = keysJ[i]; keys[i] = new Keyframe(num(k[0]), num(k[1]), num(k[2]), num(k[3]), num(k[4]), num(k[5])); keys[i].weightedMode = (WeightedMode)(int)k[6]; }
+    cv = new AnimationCurve(keys);
+    for (int i = 0; i < keys.Length; i++) { AnimationUtility.SetKeyLeftTangentMode(cv, i, (AnimationUtility.TangentMode)(int)keysJ[i][7]); AnimationUtility.SetKeyRightTangentMode(cv, i, (AnimationUtility.TangentMode)(int)keysJ[i][8]); AnimationUtility.SetKeyBroken(cv, i, (int)keysJ[i][9] == 1); }
+    for (int i = 0; i < keys.Length; i++) cv.MoveKey(i, keys[i]);   // 設 tangent mode 會重算切線，把原本的切線放回去
+  }
+  cv.preWrapMode = (WrapMode)System.Enum.Parse(typeof(WrapMode), (string)c["preWrapMode"]); cv.postWrapMode = (WrapMode)System.Enum.Parse(typeof(WrapMode), (string)c["postWrapMode"]);
+  AnimationUtility.SetEditorCurve(rebuilt, EditorCurveBinding.FloatCurve("", typeof(Animator), (string)c["attribute"]), cv);
+}
+var s = root["settings"]; var st = AnimationUtility.GetAnimationClipSettings(rebuilt);
+st.loopTime = (bool)s["loopTime"]; st.loopBlend = (bool)s["loopBlend"]; st.cycleOffset = (float)s["cycleOffset"]; st.mirror = (bool)s["mirror"];
+st.loopBlendOrientation = (bool)s["loopBlendOrientation"]; st.loopBlendPositionY = (bool)s["loopBlendPositionY"]; st.loopBlendPositionXZ = (bool)s["loopBlendPositionXZ"];
+st.keepOriginalOrientation = (bool)s["keepOriginalOrientation"]; st.keepOriginalPositionY = (bool)s["keepOriginalPositionY"]; st.keepOriginalPositionXZ = (bool)s["keepOriginalPositionXZ"];
+st.heightFromFeet = (bool)s["heightFromFeet"]; st.orientationOffsetY = (float)s["orientationOffsetY"]; st.level = (float)s["level"]; st.startTime = (float)s["startTime"]; st.stopTime = (float)s["stopTime"];
+AnimationUtility.SetAnimationClipSettings(rebuilt, st);
+
+string report = id + ": " + (mode != "" ? mode : "每條照 playback（dense " + denseCount + " 條）") + "，曲線 " + ((Newtonsoft.Json.Linq.JArray)root["curves"]).Count + " 條";
+if (compare) {
+  AnimationClip orig = null;
+  foreach (var o in AssetDatabase.LoadAllAssetsAtPath((string)root["sourceFile"])) { var c = o as AnimationClip; if (c && !c.name.StartsWith("__preview")) orig = c; }
+  var src = AssetDatabase.LoadAssetAtPath<GameObject>(character);
+  var scene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
+  var gos = new GameObject[2]; var gr = new UnityEngine.Playables.PlayableGraph[2]; var clips = new[]{ orig, rebuilt };
+  try {
+    for (int k = 0; k < 2; k++) {
+      gos[k] = (GameObject)UnityEngine.Object.Instantiate(src); UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(gos[k], scene);
+      var an = gos[k].GetComponent<Animator>(); an.applyRootMotion = true;
+      gr[k] = UnityEngine.Playables.PlayableGraph.Create(); gr[k].SetTimeUpdateMode(UnityEngine.Playables.DirectorUpdateMode.Manual);
+      var outp = UnityEngine.Animations.AnimationPlayableOutput.Create(gr[k], "o", an);
+      var cp = UnityEngine.Animations.AnimationClipPlayable.Create(gr[k], clips[k]); cp.SetApplyFootIK(true);
+      UnityEngine.Playables.PlayableOutputExtensions.SetSourcePlayable(outp, cp);
+      gr[k].Evaluate(0f); gos[k].transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+    }
+    var ta = gos[0].GetComponentsInChildren<Transform>(); var tb = gos[1].GetComponentsInChildren<Transform>();
+    float maxP = 0, maxR = 0, maxRoot = 0, maxRootR = 0; int steps = Mathf.RoundToInt(orig.length * 4 * 120);
+    for (int i = 0; i < steps; i++) {
+      gr[0].Evaluate(1f / 120f); gr[1].Evaluate(1f / 120f);
+      maxRoot = Mathf.Max(maxRoot, (gos[0].transform.position - gos[1].transform.position).magnitude); maxRootR = Mathf.Max(maxRootR, Quaternion.Angle(gos[0].transform.rotation, gos[1].transform.rotation));
+      for (int j = 0; j < ta.Length; j++) { maxP = Mathf.Max(maxP, (ta[j].position - tb[j].position).magnitude); maxR = Mathf.Max(maxR, Quaternion.Angle(ta[j].rotation, tb[j].rotation)); }
+    }
+    report += "｜跟原檔比（Foot IK＋Root 移動、播 4 遍、每 1/120 秒、" + steps + " 次）：骨頭位置最大差 " + (maxP * 1000).ToString("G4") + " mm、角度 " + maxR.ToString("G4") + "°、角色位置 " + (maxRoot * 1000).ToString("G4") + " mm、角色朝向 " + maxRootR.ToString("G4") + "°";
+  } finally { for (int k = 0; k < 2; k++) { if (gr[k].IsValid()) gr[k].Destroy(); if (gos[k]) UnityEngine.Object.DestroyImmediate(gos[k]); } UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(scene); }
+}
+if (saveDir != "") { System.IO.Directory.CreateDirectory(saveDir); var to = saveDir + "/" + id + ".anim"; AssetDatabase.CreateAsset(rebuilt, to); report += "｜存成 " + to; }
+else UnityEngine.Object.DestroyImmediate(rebuilt);
+log.Append(report).Append("\n");
+if (reportFile != "") System.IO.File.AppendAllText(reportFile, report + "\n", new System.Text.UTF8Encoding(false));
+}
+if (saveDir != "") AssetDatabase.SaveAssets();
+return log.ToString();

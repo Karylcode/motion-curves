@@ -1,0 +1,20 @@
+{
+  "name": "motion-curves",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5200 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5200 --strictPort",
+    "build:pages": "vite build --mode pages"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "3.4.2",
+    "@pixiv/three-vrm-animation": "3.4.2",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "vite": "7.1.7"
+  }
+}

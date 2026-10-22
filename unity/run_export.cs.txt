@@ -1,0 +1,32 @@
+// 在 Unity 裡直接跑 export_motion.cs.txt、rebuild_clip.cs.txt 或 setup_weapons.cs.txt（不用把整段貼進 execute_code）。
+// 用法：改 script、pick，整段丟給 Unity MCP 的 execute_code（compiler: codedom）。
+// 一次跑超過約 30 秒 execute_code 會逾時（檔案照樣寫完，只是看不到回報），一批約 15 支。
+string script = @"C:\path\to\motion-curves\unity\export_motion.cs.txt";  // 改成你的路徑；或 rebuild_clip.cs.txt、setup_weapons.cs.txt
+string pick = "null";  // 這次要跑的 id，例如 "{ \"S_Walk\", \"S_Run\" }"；"null"＝全部；""＝照腳本裡寫的 pick（setup_weapons 填 ""）
+// 其他要換掉的設定行：{ 原本那行的開頭, 換成的整行 }，例如 setup_weapons 的
+//   new[]{ "string config = ", "string config = System.IO.Path.Combine(repoRoot, \"unity\", \"characters\", \"My_Character.json\");" }, new[]{ "bool save = ", "bool save = true;" }
+string[][] replace = { };
+
+var code = System.IO.File.ReadAllText(script, System.Text.Encoding.UTF8);
+// 腳本裡的 MOTION_CURVES_ROOT 換成這個倉庫的資料夾（script 往上兩層）
+code = code.Replace("MOTION_CURVES_ROOT", "@\"" + System.IO.Path.GetDirectoryName(System.IO.Path.GetDirectoryName(script)).Replace("\"", "\"\"") + "\"");
+if (pick != "") code = System.Text.RegularExpressions.Regex.Replace(code, @"string\[\] pick = [^;]*;", "string[] pick = " + pick + ";");
+foreach (var rp in replace) code = System.Text.RegularExpressions.Regex.Replace(code, System.Text.RegularExpressions.Regex.Escape(rp[0]) + "[^;]*;", rp[1].Replace("$", "$$"));
+var src = "using UnityEngine; using UnityEditor; using System; using System.Collections.Generic; using System.Linq;\npublic static class MotionExportRunner { public static object Run() {\n" + code + "\n} }";
+// 只參考用得到的組件：全部參考時命令列太長；mscorlib 和 netstandard 一起參考會出現「型別重複定義」
+var want = new System.Collections.Generic.HashSet<string>{ "netstandard", "System", "System.Core", "UnityEngine", "UnityEngine.CoreModule", "UnityEngine.AnimationModule", "UnityEngine.DirectorModule", "UnityEditor", "UnityEditor.CoreModule", "Newtonsoft.Json" };
+foreach (var a in System.AppDomain.CurrentDomain.GetAssemblies()) { var n = a.FullName.Split(',')[0]; if (n.StartsWith("UniGLTF") || n == "VrmLib") want.Add(n); }  // setup_weapons 用 UniGLTF 匯出 glb（用 FullName：專案路徑有中文，GetName() 會出錯）
+var p = new System.CodeDom.Compiler.CompilerParameters();
+// 每次用不同的 dll 檔名：好幾個同時跑也不會互相蓋掉
+p.GenerateInMemory = false; p.OutputAssembly = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "motion-curves-" + System.Guid.NewGuid().ToString("N") + ".dll");
+var seen = new System.Collections.Generic.HashSet<string>();
+foreach (var a in System.AppDomain.CurrentDomain.GetAssemblies()) { try { if (a.IsDynamic || string.IsNullOrEmpty(a.Location)) continue; var n = a.FullName.Split(',')[0]; if (want.Contains(n) && seen.Add(n)) p.ReferencedAssemblies.Add(a.Location); } catch {} }
+var r = new Microsoft.CSharp.CSharpCodeProvider().CompileAssemblyFromSource(p, src);
+var e = new System.Text.StringBuilder();
+foreach (System.CodeDom.Compiler.CompilerError er in r.Errors) {
+  if (er.IsWarning) continue;
+  var t = (er.ErrorText ?? "").Trim('\uFEFF', ' ', '\t', '\r', '\n'); if (string.IsNullOrEmpty(er.ErrorNumber) && t.Length == 0) continue;  // mcs 多印的 BOM，不是真的錯誤
+  e.Append("第 ").Append(er.Line - 2).Append(" 行: ").Append(er.ErrorText).Append("\n"); }
+if (e.Length > 0) return "編譯錯誤（行號是腳本檔的）\n" + e;
+var asm = System.Reflection.Assembly.Load(System.IO.File.ReadAllBytes(p.OutputAssembly));
+return asm.GetType("MotionExportRunner").GetMethod("Run").Invoke(null, null);

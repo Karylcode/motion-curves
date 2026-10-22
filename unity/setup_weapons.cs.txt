@@ -1,0 +1,103 @@
+// 幫一個角色（例如 Unity 商城買的角色包，原版 prefab 拿著武器）做「AvatarSample_A 拿這個角色的武器」：算握法、做 prefab、匯出網頁用的 glb。
+// 用法：用 run_export.cs.txt 跑（script 改成這個檔、pick 填 ""，replace 換掉下面 config 和 save 兩行）。
+// 設定讀 unity/characters/<角色>.json：sourcePrefab（原版角色）、prefab（要做的 AvatarSample_A 版）、weapons[].object（原版裡的武器物件，要有 MeshFilter）、
+//   weapons[].model（網頁用的 glb，存到 public/models/）、gripClips（算握法用的動作，可省略＝自動挑 8 支）。
+// 握法：讓原版角色和 AvatarSample_A 用同一個動作擺同一個姿勢，武器的世界朝向照原版、位置＝AvatarSample_A 同一根人骨＋原版的相對位移（依手掌大小縮放），
+//       每支動作的開頭和中間各取一次，取平均。武器掛在原版裡最近的人骨（例如右手）底下。
+// save=false 只報告（握法、各姿勢差多少、武器有沒有被動畫帶著相對手移動、模型大小和貼圖），true 才存 prefab 和 glb。
+string repoRoot = MOTION_CURVES_ROOT;  // 由 run_export.cs.txt 換成這個倉庫的資料夾
+string config = System.IO.Path.Combine(repoRoot, "unity", "characters", "_example.json");
+bool save = false;
+var cfg = Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(config, System.Text.Encoding.UTF8));
+string originalPrefab = (string)cfg["sourcePrefab"], outPrefab = (string)cfg["prefab"];
+var wlist = (Newtonsoft.Json.Linq.JArray)cfg["weapons"];
+var weaponObjects = new string[wlist.Count]; var glbOut = new string[wlist.Count];
+for (int i = 0; i < wlist.Count; i++) { weaponObjects[i] = (string)wlist[i]["object"]; glbOut[i] = System.IO.Path.GetFileName((string)wlist[i]["model"]); }
+var gripClips = cfg["gripClips"] != null ? cfg["gripClips"].ToObject<string[]>() : new string[0];
+// weapons[].socket（可省略）：原版武器是用 ParentConstraint 掛在「插槽」上、動畫事件切換插槽（Character_Weapon_Controller）。
+//   有填就假設武器的約束根（帶 ParentConstraint 的那層）放在這個插槽上（偏移照約束設定）來算握法，例如 "Hand_R_Socket"；沒填就照 prefab 裡現在的位置。
+var sockets = new string[wlist.Count]; for (int i = 0; i < wlist.Count; i++) sockets[i] = (string)wlist[i]["socket"];
+string vrmPath = "Assets/Characters/AvatarSample_A/AvatarSample_A.vrm";
+string modelsDir = System.IO.Path.Combine(repoRoot, "public", "models");
+
+var sb = new System.Text.StringBuilder();
+var scene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
+var made = new System.Collections.Generic.List<UnityEngine.Object>();
+// cullingMode 改 AlwaysAnimate：機槍、火箭筒的原版是 CullUpdateTransforms，預覽場景沒有相機時姿勢會套不上去（只改複製品）
+System.Func<string, GameObject> spawn = p => { var g = (GameObject)UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>(p)); UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(g, scene); made.Add(g); g.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity); var an0 = g.GetComponentInChildren<Animator>(); an0.applyRootMotion = false; an0.cullingMode = AnimatorCullingMode.AlwaysAnimate; return g; };
+System.Action<GameObject, AnimationClip, float> pose = (g, clip, t) => { var a = g.GetComponentInChildren<Animator>(); var gr = UnityEngine.Playables.PlayableGraph.Create(); gr.SetTimeUpdateMode(UnityEngine.Playables.DirectorUpdateMode.Manual);
+  var o = UnityEngine.Animations.AnimationPlayableOutput.Create(gr, "o", a); var cp = UnityEngine.Animations.AnimationClipPlayable.Create(gr, clip); cp.SetApplyFootIK(false); UnityEngine.Playables.PlayableOutputExtensions.SetSourcePlayable(o, cp); UnityEngine.Playables.PlayableExtensions.SetTime(cp, t); gr.Evaluate(0f); gr.Destroy(); };
+System.Func<string, AnimationClip> clipOf = p => { AnimationClip r = null; foreach (var o in AssetDatabase.LoadAllAssetsAtPath(p)) { var c = o as AnimationClip; if (c && !c.name.StartsWith("__preview")) r = c; } return r; };
+try {
+  var orig = spawn(originalPrefab); var vrm = spawn(vrmPath);
+  var ao = orig.GetComponentInChildren<Animator>(); var av = vrm.GetComponentInChildren<Animator>();
+  var humanOf = new System.Collections.Generic.Dictionary<Transform, HumanBodyBones>();
+  for (int i = 0; i < (int)HumanBodyBones.LastBone; i++) { var bt = ao.GetBoneTransform((HumanBodyBones)i); if (bt && !humanOf.ContainsKey(bt)) humanOf[bt] = (HumanBodyBones)i; }
+  // 算握法用的動作
+  var clipPaths = new System.Collections.Generic.List<string>(gripClips);
+  if (clipPaths.Count == 0) { var dir = originalPrefab.Substring(0, originalPrefab.IndexOf("/Prefab/")) + "/Animations"; var all = new System.Collections.Generic.SortedSet<string>();
+    foreach (var g in AssetDatabase.FindAssets("t:AnimationClip", new[]{ dir })) { var p = AssetDatabase.GUIDToAssetPath(g); if (!p.Contains("/Emotion/")) all.Add(p); }
+    var list = new System.Collections.Generic.List<string>(all); int step = Mathf.Max(1, list.Count / 8); for (int i = 0; i < list.Count && clipPaths.Count < 8; i += step) clipPaths.Add(list[i]); }
+  sb.Append("grip clips: ").Append(clipPaths.Count).Append("\n");
+  var inst = save ? (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(vrmPath), scene) : null;
+  for (int wi = 0; wi < weaponObjects.Length; wi++) {
+    // 物件名稱可以寫「父物件名/物件名」區分同名的（例如雙刀左右手都叫 Weapon_Dual_Katana）；prefab 裡的武器物件名稱會把 / 換成 __
+    var wParts = weaponObjects[wi].Split('/'); string wName = wParts[wParts.Length - 1], wParent = wParts.Length > 1 ? wParts[wParts.Length - 2] : null;
+    Transform w = null; foreach (var t in orig.GetComponentsInChildren<Transform>(true)) if (t.name == wName && t.GetComponent<MeshFilter>() && (wParent == null || (t.parent && t.parent.name == wParent))) w = t;
+    if (!w) { sb.Append(weaponObjects[wi]).Append(": 找不到（要有 MeshFilter 的物件）\n"); continue; }
+    // 指定插槽時：武器（網格）在世界的位置＝插槽 × 約束偏移 ×（約束根 → 網格）
+    Transform sock = null, cRoot = null; Vector3 tOff = Vector3.zero; Quaternion rOff = Quaternion.identity; Matrix4x4 rootToMesh = Matrix4x4.identity;
+    if (!string.IsNullOrEmpty(sockets[wi])) {
+      UnityEngine.Animations.ParentConstraint pc = null; var q = w; while (q && !pc) { pc = q.GetComponent<UnityEngine.Animations.ParentConstraint>(); if (!pc) q = q.parent; }
+      if (pc) { cRoot = pc.transform; for (int si = 0; si < pc.sourceCount; si++) { var src0 = pc.GetSource(si); if (src0.sourceTransform && src0.sourceTransform.name == sockets[wi]) { sock = src0.sourceTransform; tOff = pc.GetTranslationOffset(si); rOff = Quaternion.Euler(pc.GetRotationOffset(si)); } } }
+      if (!sock) foreach (var t in orig.GetComponentsInChildren<Transform>(true)) if (t.name == sockets[wi]) sock = t;
+      if (!sock) { sb.Append(weaponObjects[wi]).Append(": 找不到插槽 ").Append(sockets[wi]).Append("\n"); continue; }
+      if (!cRoot) cRoot = w;
+      rootToMesh = cRoot.worldToLocalMatrix * w.localToWorldMatrix;
+      sb.Append(weaponObjects[wi]).Append("：用插槽 ").Append(sock.name).Append("（約束根 ").Append(cRoot.name).Append("）\n");
+    }
+    System.Func<Vector3> wPos = () => sock ? (Vector3)(Matrix4x4.TRS(sock.TransformPoint(tOff), sock.rotation * rOff, cRoot.lossyScale) * rootToMesh).GetColumn(3) : w.position;
+    System.Func<Quaternion> wRot = () => sock ? (sock.rotation * rOff) * (Quaternion.Inverse(cRoot.rotation) * w.rotation) : w.rotation;
+    Transform ancO = sock ? sock : w.parent; while (ancO && !humanOf.ContainsKey(ancO)) ancO = ancO.parent;
+    var hb = humanOf[ancO]; var ancV = av.GetBoneTransform(hb);
+    float s = 1f; var mo = ao.GetBoneTransform(HumanBodyBones.RightMiddleProximal); var mv = av.GetBoneTransform(HumanBodyBones.RightMiddleProximal);
+    if (mo && mv) s = (mv.position - av.GetBoneTransform(HumanBodyBones.RightHand).position).magnitude / (mo.position - ao.GetBoneTransform(HumanBodyBones.RightHand).position).magnitude;
+    var rots = new System.Collections.Generic.List<Quaternion>(); var poss = new System.Collections.Generic.List<Vector3>();
+    Quaternion relRot0 = Quaternion.identity; Vector3 relPos0 = Vector3.zero; bool first = true; float relMaxA = 0, relMaxP = 0; string relWhere = "";
+    foreach (var cpth in clipPaths) { var clip = clipOf(cpth); foreach (var frac in new[]{ 0f, 0.5f }) { float t = clip.length * frac; pose(orig, clip, t); pose(vrm, clip, t);
+      rots.Add(Quaternion.Inverse(ancV.rotation) * wRot()); poss.Add(Quaternion.Inverse(ancV.rotation) * (wPos() - ancO.position) * s);
+      // 武器相對原版那根人骨有沒有在動（輔助骨頭被動畫帶著走）
+      var rr = Quaternion.Inverse(ancO.rotation) * wRot(); var rp = Quaternion.Inverse(ancO.rotation) * (wPos() - ancO.position);
+      if (first) { relRot0 = rr; relPos0 = rp; first = false; } else { float da = Quaternion.Angle(rr, relRot0), dp = (rp - relPos0).magnitude; if (da > relMaxA || dp > relMaxP) relWhere = System.IO.Path.GetFileNameWithoutExtension(cpth) + "@" + frac; relMaxA = Mathf.Max(relMaxA, da); relMaxP = Mathf.Max(relMaxP, dp); } } }
+    Vector4 acc = Vector4.zero; foreach (var q in rots) { var qq = Quaternion.Dot(rots[0], q) < 0 ? new Quaternion(-q.x, -q.y, -q.z, -q.w) : q; acc += new Vector4(qq.x, qq.y, qq.z, qq.w); }
+    acc.Normalize(); var mean = new Quaternion(acc.x, acc.y, acc.z, acc.w); Vector3 pm = Vector3.zero; foreach (var p in poss) pm += p; pm /= poss.Count;
+    float sa = 0, sp = 0; for (int i = 0; i < rots.Count; i++) { sa = Mathf.Max(sa, Quaternion.Angle(mean, rots[i])); sp = Mathf.Max(sp, (poss[i] - pm).magnitude); }
+    var mesh = w.GetComponent<MeshFilter>().sharedMesh; var mr = w.GetComponent<MeshRenderer>(); var mat = mr ? mr.sharedMaterial : null;
+    Texture tex = mat ? (mat.HasProperty("_MainTex") && mat.GetTexture("_MainTex") ? mat.GetTexture("_MainTex") : (mat.HasProperty("_BaseMap") ? mat.GetTexture("_BaseMap") : null)) : null;
+    sb.Append(weaponObjects[wi]).Append("：掛在 ").Append(hb).Append("（原版 ").Append(ancO.name).Append("，中間經過 ");
+    var chain = ""; var pp = w.parent; while (pp && pp != ancO) { chain = pp.name + (chain == "" ? "" : "/" + chain); pp = pp.parent; } sb.Append(chain == "" ? "沒有" : chain).Append("）")
+      .Append("\n  握法 lpos=").Append(pm.ToString("F4")).Append(" lrot=").Append(mean.eulerAngles.ToString("F2")).Append("，姿勢之間最多差 ").Append(sa.ToString("F1")).Append("° ").Append((sp * 1000).ToString("F1")).Append(" mm")
+      .Append("\n  原版武器相對那根人骨最多移動 ").Append(relMaxA.ToString("F1")).Append("° ").Append((relMaxP * 1000).ToString("F1")).Append(" mm").Append(relMaxA > 2 || relMaxP > 0.01f ? "（有被動畫帶著動！最大在 " + relWhere + "）" : "（固定）")
+      .Append("\n  模型 bounds=").Append(mesh.bounds.ToString("F3")).Append(" 貼圖=").Append(tex ? AssetDatabase.GetAssetPath(tex) : "無").Append(" 材質=").Append(mat ? mat.name + "(" + mat.shader.name + ")" : "無").Append("\n");
+    if (save) {
+      var hand = inst.GetComponent<Animator>().GetBoneTransform(hb);
+      var wg = new GameObject(weaponObjects[wi].Replace("/", "__")); wg.transform.SetParent(hand, false); wg.transform.localPosition = pm; wg.transform.localRotation = mean;
+      // 原版武器節點有縮放的照搬（機槍是非等比 1.0023, 1.1233, 0.7856）
+      wg.transform.localScale = new Vector3(w.lossyScale.x / hand.lossyScale.x, w.lossyScale.y / hand.lossyScale.y, w.lossyScale.z / hand.lossyScale.z);
+      wg.AddComponent<MeshFilter>().sharedMesh = mesh; wg.AddComponent<MeshRenderer>().sharedMaterials = mr.sharedMaterials;
+      var mg = new GameObject(System.IO.Path.GetFileNameWithoutExtension(glbOut[wi])); UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(mg, scene); made.Add(mg);
+      mg.AddComponent<MeshFilter>().sharedMesh = mesh; var sm = new Material(Shader.Find("Standard")); sm.name = mg.name; made.Add(sm);
+      if (tex) sm.mainTexture = tex; sm.SetFloat("_Metallic", 1f); sm.SetFloat("_Glossiness", 0f); mg.AddComponent<MeshRenderer>().sharedMaterial = sm;
+      // UniGLTF 讀貼圖時會把原版貼圖的壓縮改成「不壓縮」而且不改回來，匯出後照原本的設定還原
+      var texImp = tex ? AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(tex)) as TextureImporter : null;
+      var texComp = texImp ? texImp.textureCompression : TextureImporterCompression.Compressed; bool texRead = texImp && texImp.isReadable;
+      var data = new UniGLTF.ExportingGltfData(); var settings = new UniGLTF.GltfExportSettings(); settings.InverseAxis = UniGLTF.Axes.X;
+      using (var exporter = new UniGLTF.gltfExporter(data, settings, null, null, null, new UniGLTF.EditorTextureSerializer())) { exporter.Prepare(mg); exporter.Export(); }
+      if (texImp) { texImp = AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(tex)) as TextureImporter; if (texImp.textureCompression != texComp || texImp.isReadable != texRead) { texImp.textureCompression = texComp; texImp.isReadable = texRead; texImp.SaveAndReimport(); } }
+      var bytes = data.ToGlbBytes(); System.IO.File.WriteAllBytes(System.IO.Path.Combine(modelsDir, glbOut[wi]), bytes);
+      sb.Append("  存了 models/").Append(glbOut[wi]).Append("（").Append(bytes.Length / 1024).Append(" KB）\n");
+    }
+  }
+  if (save) { var saved = PrefabUtility.SaveAsPrefabAsset(inst, outPrefab); UnityEngine.Object.DestroyImmediate(inst); sb.Append("存了 ").Append(outPrefab).Append("（").Append(PrefabUtility.GetPrefabAssetType(saved)).Append("）\n"); }
+} finally { foreach (var m in made) if (m) UnityEngine.Object.DestroyImmediate(m); UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(scene); }
+return sb.ToString() + "active dirty=" + UnityEngine.SceneManagement.SceneManager.GetActiveScene().isDirty;

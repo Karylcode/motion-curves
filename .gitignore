@@ -1,0 +1,20 @@
+node_modules/
+dist/
+site/
+*.gz
+
+# 動作數據不進 git（從 Unity 匯出或網頁匯入的，可能用到不能公開的素材）
+public/motions/
+public/_test/
+
+# 只放這個倉庫自己的角色；武器模型等從素材匯出的不進 git
+public/models/*
+!public/models/AvatarSample_A.vrm
+
+# 角色設定檔、原版 Animator 結構是各自素材包的資料；只留範本
+unity/characters/*.json
+!unity/characters/_example.json
+unity/animators/
+
+# 自己的筆記
+PRIVATE.md

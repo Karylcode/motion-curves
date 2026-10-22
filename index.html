@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>motion-curves 動作曲線</title>
+  </head>
+  <body>
+    <header class="top">
+      <h1>motion-curves</h1>
+      <div class="picker" id="picker">
+        <button id="pickBtn" class="pick-btn" aria-haspopup="listbox" title="選動作（可篩選、搜尋）"><span id="pickLabel">載入中…</span><small id="pickId"></small><i>▾</i></button>
+        <div id="pickPanel" class="pick-panel" hidden>
+          <div class="filters" id="filters">
+            <input id="pickSearch" type="search" placeholder="搜尋名稱、英文名、id、描述…" autocomplete="off" />
+          </div>
+          <div class="pick-list" id="pickList" role="listbox"></div>
+        </div>
+      </div>
+      <button id="importBtn" class="tool-btn" title="匯入動作（.vrma、.fbx）或換角色（.vrm）；也可以直接把檔案拖進網頁">匯入動作／角色</button>
+      <button id="resetVrm" class="tool-btn" hidden>恢復預設角色</button>
+      <input id="fileInput" type="file" multiple accept=".vrma,.fbx,.vrm,.glb,.gltf" hidden />
+      <p id="info" class="info"></p>
+    </header>
+    <p id="desc" class="desc"></p>
+    <main class="layout">
+      <section class="left">
+        <div id="viewer" class="viewer">
+          <div id="views" class="views"></div>
+          <div id="loading" class="loading">載入角色中…</div>
+          <div id="empty" class="empty-hint" hidden>
+            <b>還沒有動作</b>
+            <p>把動作檔拖進網頁，或按上面的「匯入動作／角色」：</p>
+            <ul>
+              <li><b>.vrma</b>：VRM 動畫，最準</li>
+              <li><b>.fbx</b>：Mixamo、Unity Humanoid 等常見骨頭名稱，預設姿勢要是 T-pose</li>
+              <li><b>.vrm</b>：換成你自己的角色</li>
+            </ul>
+            <p>匯入的動作只存在這台瀏覽器，不會上傳。要 Unity 原生曲線的話照 README 用 Unity 匯出。</p>
+          </div>
+        </div>
+        <div class="controls">
+          <div class="row">
+            <button id="prev" title="上一格">◀︎</button>
+            <button id="play" class="primary">暫停</button>
+            <button id="next" title="下一格">▶︎</button>
+            <input id="scrub" type="range" min="0" max="1" step="0.01" value="0" />
+            <span id="frameLabel" class="frame">第 0 格</span>
+          </div>
+          <div class="row opts">
+            <label>速度
+              <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option></select>
+            </label>
+            <label><input type="checkbox" data-opt="rootMotion" /> Root 移動</label>
+            <label><input type="checkbox" data-opt="weapon" checked /> 武器</label>
+            <label><input type="checkbox" data-opt="trail" /> 武器尖端軌跡</label>
+            <label><input type="checkbox" data-opt="skeleton" /> 骨架線</label>
+            <label><input type="checkbox" data-opt="mesh" checked /> 角色模型</label>
+            <label><input type="checkbox" data-opt="physics" /> 頭髮物理</label>
+          </div>
+        </div>
+      </section>
+      <section class="right">
+        <nav class="tabs" id="tabs">
+          <button data-tab="joints" class="on">關節角度</button>
+          <button data-tab="muscles">肌肉曲線（Unity）</button>
+          <button data-tab="unity">身體與 IK（Unity）</button>
+          <button data-tab="data">數據</button>
+        </nav>
+        <div id="panes" class="panes"></div>
+      </section>
+    </main>
+    <div id="dropzone" class="dropzone" hidden>放開就匯入（.vrma、.fbx 動作，.vrm 角色）</div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

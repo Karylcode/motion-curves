@@ -1,0 +1,300 @@
+// 匯出 Humanoid 動作給 motion-curves 網站。
+// 用法：在下面 jobs 加動作、用 pick 選這次要匯出哪幾支，整段丟給 Unity MCP 的 execute_code（CodeDom，C# 6）。中文可以直接寫。
+//      一次不要匯太多（約 200 格以內），execute_code 跑太久會逾時。
+// 產出 public/motions/<id>/curves.json（Unity 原生曲線：關鍵影格＋切線、每格的值、Unity 實際播放方式，能在 Unity 還原一模一樣的動作）
+//      public/motions/<id>/angles.json（套到 VRM 角色後每根骨頭的旋轉，每格切 samplesPerFrame 份，網頁播放用）
+//      public/motions/<id>/analysis.json（關節角度、腳踩地、肌肉逐格值等給 AI 分析的數字）
+// 播放方式：FBX 匯入壓縮是 Optimal 時，Unity 每條曲線各自決定怎麼播：有的是「每格一個值、格與格之間直線」，有的照動畫視窗的曲線走。
+//           每條曲線的方式記在 curves.json 的 playback，整支的比對結果記在 playbackMode、playbackCheck（見下面「判斷 Unity 實際播放方式」）。
+// 要匯出的動作寫在 unity/characters/<角色>.json（一個角色一個設定檔，格式見 unity/characters/HOWTO.md；_ 開頭的檔不讀）。
+// MOTION_CURVES_ROOT 由 run_export.cs.txt 換成這個倉庫的資料夾。中文名、英文名、類型、描述、標籤寫在 public/motions/names.json（規範見 unity/characters/NAMING.md），改名只要改那個檔＋跑 build-index。
+string repoRoot = MOTION_CURVES_ROOT;
+string outRoot = System.IO.Path.Combine(repoRoot, "public", "motions");
+string[] pick = { "S_Walk" };  // 這次只匯出這些 id；null＝全部
+string[] pickCharacters = null;  // 這次只匯出這些角色（設定檔的 character）的動作；null＝不限
+string defaultCharacter = "Assets/Characters/AvatarSample_A/AvatarSample_A.vrm";  // 設定檔的 prefab 還沒做好時，先用沒拿武器的角色匯出
+bool footIK = false;
+int K = 16;  // 每格切幾份取樣給網頁（16＝每秒 480 份；越多網頁在格與格之間越準，檔案越大：S_Walk 約 1.9 MB）
+
+var inv = System.Globalization.CultureInfo.InvariantCulture;
+System.Func<float, string> F = v => float.IsPositiveInfinity(v) ? "\"Infinity\"" : float.IsNegativeInfinity(v) ? "\"-Infinity\"" : float.IsNaN(v) ? "null" : (Mathf.Abs(v) < 1e-9f ? 0f : v).ToString("R", inv);
+System.Func<float, string> F4 = v => (Mathf.Abs(v) < 5e-7f ? 0f : v).ToString("0.######", inv);
+System.Func<string, string> J = s => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+System.Func<Quaternion, string> Qg = q => "[" + F4(q.x) + "," + F4(-q.y) + "," + F4(-q.z) + "," + F4(q.w) + "]";   // Unity -> glTF (mirror X)
+System.Func<Vector3, string> Vg = v => "[" + F4(-v.x) + "," + F4(v.y) + "," + F4(v.z) + "]";
+var enc = new System.Text.UTF8Encoding(false);
+var log = new System.Text.StringBuilder(); var timer = System.Diagnostics.Stopwatch.StartNew();
+string namesPath = System.IO.Path.Combine(outRoot, "names.json");
+var names = System.IO.File.Exists(namesPath) ? Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(namesPath, enc)) : null;
+// 每個角色設定檔的動作：{ id, FBX 路徑, 來源角色, 武器, 類別 }，武器照設定檔
+string charDir = System.IO.Path.Combine(repoRoot, "unity", "characters");
+var charOf = new System.Collections.Generic.Dictionary<string, Newtonsoft.Json.Linq.JObject>();
+var allJobs = new System.Collections.Generic.List<string[]>();
+if (System.IO.Directory.Exists(charDir)) foreach (var cf in System.IO.Directory.GetFiles(charDir, "*.json")) {
+  if (System.IO.Path.GetFileName(cf).StartsWith("_")) continue;
+  try {
+    var cc = Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(cf, enc));
+    foreach (var m in (Newtonsoft.Json.Linq.JArray)cc["motions"]) { allJobs.Add(new[]{ (string)m["id"], (string)m["file"], (string)cc["character"], (string)cc["weapon"], (string)m["category"] }); charOf[(string)m["id"]] = cc; }
+  } catch (System.Exception ex) { log.Append("略過設定檔 ").Append(System.IO.Path.GetFileName(cf)).Append("：").Append(ex.Message).Append("\n"); }
+}
+System.Func<Newtonsoft.Json.Linq.JToken, Vector3> vec3 = t => t == null ? Vector3.zero : new Vector3((float)t[0], (float)t[1], (float)t[2]);
+
+// ===== 每支動作 =====
+foreach (var job in allJobs) {
+if (pick != null && System.Array.IndexOf(pick, job[0]) < 0) continue;
+if (pickCharacters != null && System.Array.IndexOf(pickCharacters, job[2]) < 0) continue;
+string motionId = job[0], clipPath = job[1], sourceCharacter = job[2], weapon = job[3], category = job[4];
+string label = motionId, en = "", type = category, description = "", tagsJson = "{}";
+var nm = names != null ? names[motionId] as Newtonsoft.Json.Linq.JObject : null;
+if (nm != null) { label = (string)nm["label"] ?? motionId; en = (string)nm["en"] ?? ""; type = (string)nm["type"] ?? category; description = (string)nm["description"] ?? ""; if (nm["tags"] != null) tagsJson = nm["tags"].ToString(Newtonsoft.Json.Formatting.None); }
+AnimationClip clip = null;
+foreach (var o in AssetDatabase.LoadAllAssetsAtPath(clipPath)) { var c = o as AnimationClip; if (c && !c.name.StartsWith("__preview")) clip = c; }
+if (!clip) { log.Append(motionId).Append(": 找不到動作 ").Append(clipPath).Append("\n"); continue; }
+string dir = System.IO.Path.Combine(outRoot, motionId); System.IO.Directory.CreateDirectory(dir);
+float fr = clip.frameRate; int N = Mathf.RoundToInt(clip.length * fr);
+var st = AnimationUtility.GetAnimationClipSettings(clip);
+System.Func<string, string> groupOf = n =>
+  n.StartsWith("RootT.") || n.StartsWith("RootQ.") ? "body" :
+  n.StartsWith("MotionT.") || n.StartsWith("MotionQ.") ? "rootMotion" :
+  n.StartsWith("LeftFootT.") || n.StartsWith("LeftFootQ.") || n.StartsWith("RightFootT.") || n.StartsWith("RightFootQ.") || n.StartsWith("LeftHandT.") || n.StartsWith("LeftHandQ.") || n.StartsWith("RightHandT.") || n.StartsWith("RightHandQ.") ? "ikGoal" :
+  n.StartsWith("LeftHand.") || n.StartsWith("RightHand.") ? "fingerMuscle" : "muscle";
+var human = new System.Collections.Generic.List<EditorCurveBinding>();
+foreach (var b in AnimationUtility.GetCurveBindings(clip)) if (b.path == "" && b.type == typeof(Animator)) human.Add(b);
+
+// 這支動作用的角色 prefab 和武器（可以好幾把）：物件名稱、網頁模型、軌跡的兩個點（武器模型座標）
+var wObj = new System.Collections.Generic.List<string>(); var wModel = new System.Collections.Generic.List<string>();
+var wTip = new System.Collections.Generic.List<Vector3>(); var wBase = new System.Collections.Generic.List<Vector3>();
+var cc = charOf[motionId]; string prefabPath = (string)cc["prefab"] ?? defaultCharacter;
+if (cc["weapons"] != null) foreach (var wj in (Newtonsoft.Json.Linq.JArray)cc["weapons"]) { wObj.Add(((string)wj["object"]).Replace("/", "__")); wModel.Add((string)wj["model"]); wTip.Add(vec3(wj["tip"])); wBase.Add(vec3(wj["base"])); }
+var src = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+// 武器 prefab 還沒做好時先用沒拿武器的 AvatarSample_A 匯出（身體動作一樣，之後做好 prefab 再匯出一次補上武器）
+if (!src) { log.Append(motionId).Append(": 還沒有 ").Append(prefabPath).Append("，先不帶武器\n"); src = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Characters/AvatarSample_A/AvatarSample_A.vrm"); wObj.Clear(); wModel.Clear(); wTip.Clear(); wBase.Clear(); }
+var scene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
+var made = new System.Collections.Generic.List<UnityEngine.Object>(); var graphs = new System.Collections.Generic.List<UnityEngine.Playables.PlayableGraph>();
+var lastPlayable = new UnityEngine.Animations.AnimationClipPlayable[1]; var lastGraph = new UnityEngine.Playables.PlayableGraph[1];
+System.Func<AnimationClip, bool, GameObject> spawn = (c, rootMotion) => {
+  var g = (GameObject)UnityEngine.Object.Instantiate(src); UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(g, scene); made.Add(g);
+  g.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+  var a = g.GetComponent<Animator>(); a.applyRootMotion = rootMotion;
+  var gr = UnityEngine.Playables.PlayableGraph.Create(); gr.SetTimeUpdateMode(UnityEngine.Playables.DirectorUpdateMode.Manual); graphs.Add(gr);
+  var outp = UnityEngine.Animations.AnimationPlayableOutput.Create(gr, "o", a);
+  var cp = UnityEngine.Animations.AnimationClipPlayable.Create(gr, c); cp.SetApplyFootIK(footIK);
+  UnityEngine.Playables.PlayableOutputExtensions.SetSourcePlayable(outp, cp);
+  lastPlayable[0] = cp; lastGraph[0] = gr; return g; };
+string report = "";
+try {
+  // ---------- 判斷 Unity 實際播放方式 ----------
+  // Optimal 壓縮時 Unity 每條曲線各自選：關鍵影格夠多（7 × 關鍵影格數 ≥ 格數 N＝長度×fps，不含最後一格；剛好相等也算）的存成「每格一個值、格與格之間直線」（dense），
+  // 其他的照關鍵影格和切線（curve）。這條規則是用 AnimationHumanStream 讀 Unity 實際播放的肌肉值比出來的。
+  // 這裡做三種（全部 curve、全部 dense、每條照規則）跟原檔實際播放比（每 1/240 秒、所有骨頭），選差距最小的。
+  var denseRule = new System.Collections.Generic.Dictionary<string, bool>();
+  var tests = new AnimationClip[3]; for (int k = 0; k < 3; k++) { tests[k] = new AnimationClip(); tests[k].frameRate = fr; made.Add(tests[k]); }
+  foreach (var b in human) {
+    var cv = AnimationUtility.GetEditorCurve(clip, b);
+    var dk = new Keyframe[N + 1]; for (int f = 0; f <= N; f++) dk[f] = new Keyframe(f / fr, cv.Evaluate(f / fr));
+    var lin = new AnimationCurve(dk);
+    for (int f = 0; f <= N; f++) { AnimationUtility.SetKeyLeftTangentMode(lin, f, AnimationUtility.TangentMode.Linear); AnimationUtility.SetKeyRightTangentMode(lin, f, AnimationUtility.TangentMode.Linear); }
+    denseRule[b.propertyName] = 7 * cv.length >= N;
+    AnimationUtility.SetEditorCurve(tests[0], b, cv); AnimationUtility.SetEditorCurve(tests[1], b, lin); AnimationUtility.SetEditorCurve(tests[2], b, denseRule[b.propertyName] ? lin : cv);
+  }
+  for (int k = 0; k < 3; k++) AnimationUtility.SetAnimationClipSettings(tests[k], st);
+  var cg = new GameObject[4]; var cpl = new UnityEngine.Animations.AnimationClipPlayable[4]; var cgr = new UnityEngine.Playables.PlayableGraph[4]; var cclips = new[]{ clip, tests[0], tests[1], tests[2] };
+  for (int k = 0; k < 4; k++) { cg[k] = spawn(cclips[k], false); cpl[k] = lastPlayable[0]; cgr[k] = lastGraph[0]; }
+  var CT = new Transform[4][]; for (int k = 0; k < 4; k++) CT[k] = cg[k].GetComponentsInChildren<Transform>();
+  var errP = new float[4]; var errR = new float[4];
+  for (int i = 0; i <= N * 8; i++) {
+    for (int k = 0; k < 4; k++) { UnityEngine.Playables.PlayableExtensions.SetTime(cpl[k], i / (fr * 8.0)); cgr[k].Evaluate(0f); }
+    for (int k = 1; k < 4; k++) for (int j = 0; j < CT[0].Length; j++) { errP[k] = Mathf.Max(errP[k], (CT[0][j].position - CT[k][j].position).magnitude); errR[k] = Mathf.Max(errR[k], Quaternion.Angle(CT[0][j].rotation, CT[k][j].rotation)); }
+  }
+  string[] modeNames = { "", "curve", "dense", "perCurve" };
+  int best = 3; for (int k = 1; k < 3; k++) if (errP[k] < errP[best]) best = k;
+  string mode = modeNames[best];
+  int denseCount = 0; foreach (var b in human) if (denseRule[b.propertyName]) denseCount++;
+  System.Func<EditorCurveBinding, string> playbackOf = b => mode == "perCurve" ? (denseRule[b.propertyName] ? "dense" : "curve") : mode;
+
+  // ---------- curves.json ----------
+  var cj = new System.Text.StringBuilder();
+  cj.Append("{\n\"format\":\"unity-humanoid-clip/2\",\"id\":").Append(J(motionId)).Append(",\"name\":").Append(J(clip.name))
+    .Append(",\"sourceFile\":").Append(J(clipPath)).Append(",\"sourceCharacter\":").Append(J(sourceCharacter)).Append(",\"weapon\":").Append(J(weapon)).Append(",\"category\":").Append(J(category)).Append(",\"label\":").Append(J(label)).Append(",\"en\":").Append(J(en)).Append(",\"type\":").Append(J(type)).Append(",\"description\":").Append(J(description)).Append(",\"tags\":").Append(tagsJson)
+    .Append(",\n\"frameRate\":").Append(F(fr)).Append(",\"length\":").Append(F(clip.length)).Append(",\"frameCount\":").Append(N)
+    .Append(",\"humanMotion\":").Append(clip.humanMotion ? "true" : "false").Append(",\"wrapMode\":").Append(J(clip.wrapMode.ToString()))
+    .Append(",\n\"playbackMode\":").Append(J(mode))
+    .Append(",\"playbackCheck\":{\"note\":\"三種還原方式各自跟原檔實際播放比（每 1/240 秒、所有骨頭、原地）。perCurve＝每條曲線照自己的 playback；dense＝全部每格一個值、格與格之間直線；curve＝全部照關鍵影格和切線\"")
+    .Append(",\"perCurveMaxMm\":").Append(F4(errP[3] * 1000)).Append(",\"perCurveMaxDeg\":").Append(F4(errR[3])).Append(",\"perCurveDenseCount\":").Append(denseCount)
+    .Append(",\"denseMaxMm\":").Append(F4(errP[2] * 1000)).Append(",\"denseMaxDeg\":").Append(F4(errR[2]))
+    .Append(",\"curveMaxMm\":").Append(F4(errP[1] * 1000)).Append(",\"curveMaxDeg\":").Append(F4(errR[1])).Append("}")
+    .Append(",\n\"settings\":{\"loopTime\":").Append(st.loopTime ? "true" : "false").Append(",\"loopBlend\":").Append(st.loopBlend ? "true" : "false")
+    .Append(",\"cycleOffset\":").Append(F(st.cycleOffset)).Append(",\"mirror\":").Append(st.mirror ? "true" : "false")
+    .Append(",\"loopBlendOrientation\":").Append(st.loopBlendOrientation ? "true" : "false").Append(",\"loopBlendPositionY\":").Append(st.loopBlendPositionY ? "true" : "false").Append(",\"loopBlendPositionXZ\":").Append(st.loopBlendPositionXZ ? "true" : "false")
+    .Append(",\"keepOriginalOrientation\":").Append(st.keepOriginalOrientation ? "true" : "false").Append(",\"keepOriginalPositionY\":").Append(st.keepOriginalPositionY ? "true" : "false").Append(",\"keepOriginalPositionXZ\":").Append(st.keepOriginalPositionXZ ? "true" : "false")
+    .Append(",\"heightFromFeet\":").Append(st.heightFromFeet ? "true" : "false").Append(",\"orientationOffsetY\":").Append(F(st.orientationOffsetY)).Append(",\"level\":").Append(F(st.level))
+    .Append(",\"startTime\":").Append(F(st.startTime)).Append(",\"stopTime\":").Append(F(st.stopTime)).Append(",\"hasAdditiveReferencePose\":").Append(st.hasAdditiveReferencePose ? "true" : "false").Append(",\"additiveReferencePoseTime\":").Append(F(st.additiveReferencePoseTime)).Append("}")
+    .Append(",\n\"keyFields\":[\"time\",\"value\",\"inTangent\",\"outTangent\",\"inWeight\",\"outWeight\",\"weightedMode\",\"leftTangentMode\",\"rightTangentMode\",\"broken\"]")
+    .Append(",\n\"curves\":[");
+  for (int i = 0; i < human.Count; i++) {
+    var b = human[i]; var cv = AnimationUtility.GetEditorCurve(clip, b);
+    cj.Append(i == 0 ? "\n" : ",\n").Append("{\"attribute\":").Append(J(b.propertyName)).Append(",\"group\":").Append(J(groupOf(b.propertyName))).Append(",\"playback\":").Append(J(playbackOf(b)))
+      .Append(",\"preWrapMode\":").Append(J(cv.preWrapMode.ToString())).Append(",\"postWrapMode\":").Append(J(cv.postWrapMode.ToString())).Append(",\"keys\":[");
+    var keys = cv.keys;
+    for (int k = 0; k < keys.Length; k++) {
+      var kf = keys[k];
+      cj.Append(k == 0 ? "" : ",").Append("[").Append(F(kf.time)).Append(",").Append(F(kf.value)).Append(",").Append(F(kf.inTangent)).Append(",").Append(F(kf.outTangent))
+        .Append(",").Append(F(kf.inWeight)).Append(",").Append(F(kf.outWeight)).Append(",").Append((int)kf.weightedMode)
+        .Append(",").Append((int)AnimationUtility.GetKeyLeftTangentMode(cv, k)).Append(",").Append((int)AnimationUtility.GetKeyRightTangentMode(cv, k)).Append(",").Append(AnimationUtility.GetKeyBroken(cv, k) ? 1 : 0).Append("]");
+    }
+    cj.Append("],\"frameValues\":[");
+    for (int f = 0; f <= N; f++) cj.Append(f == 0 ? "" : ",").Append(F(cv.Evaluate(f / fr)));
+    cj.Append("]}");
+  }
+  cj.Append("\n]}\n");
+  System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "curves.json"), cj.ToString(), enc);
+
+  // ---------- 取樣：套到角色上 ----------
+  var go = spawn(clip, false); var cp = lastPlayable[0]; var graph = lastGraph[0];
+  var anim = go.GetComponent<Animator>();
+  var bones = new System.Collections.Generic.List<HumanBodyBones>(); var tf = new System.Collections.Generic.Dictionary<HumanBodyBones, Transform>();
+  for (int i = 0; i < (int)HumanBodyBones.LastBone; i++) { var hb = (HumanBodyBones)i; var t = anim.GetBoneTransform(hb); if (t) { bones.Add(hb); tf[hb] = t; } }
+  var byT = new System.Collections.Generic.Dictionary<Transform, HumanBodyBones>(); foreach (var hb in bones) byT[tf[hb]] = hb;
+  var parent = new System.Collections.Generic.Dictionary<HumanBodyBones, int>();
+  foreach (var hb in bones) { var p = tf[hb].parent; int pb = -1; while (p) { if (byT.ContainsKey(p)) { pb = (int)byT[p]; break; } p = p.parent; } parent[hb] = pb; }
+  System.Func<HumanBodyBones, string> vrmName = hb => {
+    var s = hb.ToString(); s = char.ToLowerInvariant(s[0]) + s.Substring(1);
+    if (s.Contains("Thumb")) s = s.Replace("ThumbProximal", "ThumbMetacarpal").Replace("ThumbIntermediate", "ThumbProximal");
+    return s; };
+  var restRot = new System.Collections.Generic.Dictionary<HumanBodyBones, Quaternion>(); var restPos = new System.Collections.Generic.Dictionary<HumanBodyBones, Vector3>();
+  foreach (var hb in bones) { restRot[hb] = tf[hb].rotation; restPos[hb] = tf[hb].position; }
+  // 武器：在 prefab 裡找物件，記下掛在哪根人骨（最近的人骨祖先，例如右手、左手）和 T-pose 時相對那根骨頭的位置角度
+  var wT = new System.Collections.Generic.List<Transform>(); var wSpec = new System.Collections.Generic.List<string>();
+  var wTipPt = new System.Collections.Generic.List<Vector3>(); var wBasePt = new System.Collections.Generic.List<Vector3>();
+  var wTipS = new System.Collections.Generic.List<System.Text.StringBuilder>(); var wBaseS = new System.Collections.Generic.List<System.Text.StringBuilder>();
+  string wMissing = "";
+  for (int wi = 0; wi < wObj.Count; wi++) {
+    Transform wt = null; foreach (var t in go.GetComponentsInChildren<Transform>(true)) if (t.name == wObj[wi]) wt = t;
+    if (!wt) { wMissing += " 找不到武器 " + wObj[wi]; continue; }
+    var pa = wt.parent; while (pa && !byT.ContainsKey(pa)) pa = pa.parent;
+    var ab = pa ? byT[pa] : HumanBodyBones.RightHand;
+    wT.Add(wt); wTipPt.Add(wTip[wi]); wBasePt.Add(wBase[wi]); wTipS.Add(new System.Text.StringBuilder()); wBaseS.Add(new System.Text.StringBuilder());
+    wSpec.Add("{\"name\":" + J(wObj[wi]) + ",\"attachBone\":" + J(vrmName(ab)) + ",\"model\":" + J(wModel[wi]) + ",\"position\":" + Vg(wt.position - tf[ab].position) + ",\"rotation\":" + Qg(wt.rotation) + ",\"scale\":[" + F4(wt.lossyScale.x) + "," + F4(wt.lossyScale.y) + "," + F4(wt.lossyScale.z) + "]}");
+  }
+
+  var rot = new System.Collections.Generic.Dictionary<HumanBodyBones, System.Text.StringBuilder>(); var pos = new System.Collections.Generic.Dictionary<HumanBodyBones, System.Text.StringBuilder>();
+  foreach (var hb in bones) { rot[hb] = new System.Text.StringBuilder(); pos[hb] = new System.Text.StringBuilder(); }
+  var hipsPos = new System.Text.StringBuilder();
+  string[] angN = { "kneeFlexL", "kneeFlexR", "elbowFlexL", "elbowFlexR", "hipFlexL", "hipFlexR", "hipAbdL", "hipAbdR", "shoulderFlexL", "shoulderFlexR", "shoulderAbdL", "shoulderAbdR",
+                    "trunkLean", "trunkSide", "pelvisYaw", "chestYaw", "chestTwist", "pelvisTilt", "headPitch", "headYaw", "footHeightL", "footHeightR", "toeHeightL", "toeHeightR", "stanceWidth", "stanceStride", "handHeightL", "handHeightR" };
+  var ang = new float[angN.Length, N + 1];
+  Vector3 fwd = Vector3.forward, up = Vector3.up, right = Vector3.right;
+  System.Func<HumanBodyBones, Vector3> P = hb => tf.ContainsKey(hb) ? tf[hb].position : Vector3.zero;
+  int S = N * K;
+  for (int si = 0; si <= S; si++) {
+    UnityEngine.Playables.PlayableExtensions.SetTime(cp, si / (double)(fr * K)); graph.Evaluate(0f);
+    var wd = new System.Collections.Generic.Dictionary<HumanBodyBones, Quaternion>();
+    foreach (var hb in bones) wd[hb] = tf[hb].rotation * Quaternion.Inverse(restRot[hb]);
+    foreach (var hb in bones) {
+      var local = parent[hb] < 0 ? wd[hb] : Quaternion.Inverse(wd[(HumanBodyBones)parent[hb]]) * wd[hb];
+      rot[hb].Append(si == 0 ? "" : ",").Append(Qg(local));
+      pos[hb].Append(si == 0 ? "" : ",").Append(Vg(tf[hb].position));
+    }
+    hipsPos.Append(si == 0 ? "" : ",").Append(Vg(tf[HumanBodyBones.Hips].position));
+    for (int k = 0; k < wT.Count; k++) { wTipS[k].Append(si == 0 ? "" : ",").Append(Vg(wT[k].TransformPoint(wTipPt[k]))); wBaseS[k].Append(si == 0 ? "" : ",").Append(Vg(wT[k].TransformPoint(wBasePt[k]))); }
+    if (si % K != 0) continue;
+    int f = si / K;
+    // 關節角度（度）與高度（公尺），以角色自己的前、上、右為準
+    System.Func<Vector3, Vector3, Vector3, float> bend = (a, b2, c) => Vector3.Angle(b2 - a, c - b2);
+    System.Func<Vector3, float> flex = d => Mathf.Atan2(Vector3.Dot(d, fwd), -Vector3.Dot(d, up)) * Mathf.Rad2Deg;
+    System.Func<Vector3, float, float> abd = (d, side) => Mathf.Atan2(side * Vector3.Dot(d, right), -Vector3.Dot(d, up)) * Mathf.Rad2Deg;
+    System.Func<Vector3, float> yaw = l => { var h = Vector3.ProjectOnPlane(l, up); return Vector3.SignedAngle(right, h, up); };
+    int a2 = 0;
+    ang[a2++, f] = bend(P(HumanBodyBones.LeftUpperLeg), P(HumanBodyBones.LeftLowerLeg), P(HumanBodyBones.LeftFoot));
+    ang[a2++, f] = bend(P(HumanBodyBones.RightUpperLeg), P(HumanBodyBones.RightLowerLeg), P(HumanBodyBones.RightFoot));
+    ang[a2++, f] = bend(P(HumanBodyBones.LeftUpperArm), P(HumanBodyBones.LeftLowerArm), P(HumanBodyBones.LeftHand));
+    ang[a2++, f] = bend(P(HumanBodyBones.RightUpperArm), P(HumanBodyBones.RightLowerArm), P(HumanBodyBones.RightHand));
+    var thL = P(HumanBodyBones.LeftLowerLeg) - P(HumanBodyBones.LeftUpperLeg); var thR = P(HumanBodyBones.RightLowerLeg) - P(HumanBodyBones.RightUpperLeg);
+    ang[a2++, f] = flex(thL); ang[a2++, f] = flex(thR); ang[a2++, f] = abd(thL, -1); ang[a2++, f] = abd(thR, 1);
+    var uaL = P(HumanBodyBones.LeftLowerArm) - P(HumanBodyBones.LeftUpperArm); var uaR = P(HumanBodyBones.RightLowerArm) - P(HumanBodyBones.RightUpperArm);
+    ang[a2++, f] = flex(uaL); ang[a2++, f] = flex(uaR); ang[a2++, f] = abd(uaL, -1); ang[a2++, f] = abd(uaR, 1);
+    var trunk = P(HumanBodyBones.Neck) - P(HumanBodyBones.Hips);
+    ang[a2++, f] = Mathf.Atan2(Vector3.Dot(trunk, fwd), Vector3.Dot(trunk, up)) * Mathf.Rad2Deg;
+    ang[a2++, f] = Mathf.Atan2(Vector3.Dot(trunk, right), Vector3.Dot(trunk, up)) * Mathf.Rad2Deg;
+    var hipLine = P(HumanBodyBones.RightUpperLeg) - P(HumanBodyBones.LeftUpperLeg); var shLine = P(HumanBodyBones.RightUpperArm) - P(HumanBodyBones.LeftUpperArm);
+    float py = yaw(hipLine), cy = yaw(shLine);
+    ang[a2++, f] = py; ang[a2++, f] = cy; ang[a2++, f] = Mathf.DeltaAngle(py, cy);
+    ang[a2++, f] = Mathf.Atan2(Vector3.Dot(hipLine, up), Vector3.ProjectOnPlane(hipLine, up).magnitude) * Mathf.Rad2Deg;
+    var face = wd[HumanBodyBones.Head] * fwd;
+    ang[a2++, f] = Mathf.Atan2(-Vector3.Dot(face, up), Vector3.ProjectOnPlane(face, up).magnitude) * Mathf.Rad2Deg;
+    ang[a2++, f] = Vector3.SignedAngle(fwd, Vector3.ProjectOnPlane(face, up), up);
+    ang[a2++, f] = P(HumanBodyBones.LeftFoot).y - restPos[HumanBodyBones.LeftFoot].y; ang[a2++, f] = P(HumanBodyBones.RightFoot).y - restPos[HumanBodyBones.RightFoot].y;
+    ang[a2++, f] = tf.ContainsKey(HumanBodyBones.LeftToes) ? P(HumanBodyBones.LeftToes).y - restPos[HumanBodyBones.LeftToes].y : float.NaN;
+    ang[a2++, f] = tf.ContainsKey(HumanBodyBones.RightToes) ? P(HumanBodyBones.RightToes).y - restPos[HumanBodyBones.RightToes].y : float.NaN;
+    var feet = P(HumanBodyBones.RightFoot) - P(HumanBodyBones.LeftFoot);
+    ang[a2++, f] = Vector3.Dot(feet, right); ang[a2++, f] = Vector3.Dot(feet, fwd);
+    ang[a2++, f] = P(HumanBodyBones.LeftHand).y - P(HumanBodyBones.Hips).y; ang[a2++, f] = P(HumanBodyBones.RightHand).y - P(HumanBodyBones.Hips).y;
+  }
+  // Root 移動軌跡：另開一隻開 Root Motion 的，從頭連續播
+  var rm = spawn(clip, true); var rgraph = lastGraph[0];
+  rgraph.Evaluate(0f); rm.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+  var rootS = new System.Text.StringBuilder();
+  for (int si = 0; si <= S; si++) {
+    if (si > 0) rgraph.Evaluate(1f / (fr * K));
+    rootS.Append(si == 0 ? "" : ",").Append("[").Append(F4(-rm.transform.position.x)).Append(",").Append(F4(rm.transform.position.y)).Append(",").Append(F4(rm.transform.position.z)).Append(",").Append(F4(-rm.transform.eulerAngles.y)).Append("]");
+  }
+  // ---------- angles.json ----------
+  var aj = new System.Text.StringBuilder();
+  aj.Append("{\n\"format\":\"vrm-normalized-pose/2\",\"id\":").Append(J(motionId)).Append(",\"character\":").Append(J(src.name)).Append(",\"frameRate\":").Append(F(fr)).Append(",\"frameCount\":").Append(N + 1)
+    .Append(",\"samplesPerFrame\":").Append(K).Append(",\"sampleCount\":").Append(S + 1)
+    .Append(",\"loop\":").Append(st.loopTime ? "true" : "false").Append(",\"footIK\":").Append(footIK ? "true" : "false")
+    .Append(",\n\"coordinate\":\"glTF／three.js 右手座標，+Y 朝上，角色面向 +Z，公尺；Unity 數值換算：位置 (-x,y,z)、旋轉 (x,-y,-z,w)\"")
+    .Append(",\n\"rotationSpace\":\"VRM normalized：每根骨頭相對 T-pose 的旋轉（T-pose 時全部是單位四元數），local 是相對父骨頭\"")
+    .Append(",\n\"sampling\":\"取自 Unity 實際播放原檔的結果；每格切 samplesPerFrame 份，第 i 份的時間＝i ÷ (frameRate × samplesPerFrame) 秒\"")
+    .Append(",\n\"bones\":[");
+  for (int i = 0; i < bones.Count; i++) aj.Append(i == 0 ? "" : ",").Append("{\"name\":").Append(J(vrmName(bones[i]))).Append(",\"parent\":").Append(parent[bones[i]] < 0 ? "null" : J(vrmName((HumanBodyBones)parent[bones[i]]))).Append("}");
+  aj.Append("],\n\"localRotations\":{");
+  for (int i = 0; i < bones.Count; i++) aj.Append(i == 0 ? "\n" : ",\n").Append(J(vrmName(bones[i]))).Append(":[").Append(rot[bones[i]]).Append("]");
+  aj.Append("},\n\"hipsPosition\":[").Append(hipsPos).Append("],\n\"rootMotion\":[").Append(rootS).Append("],\n\"rootMotionFields\":[\"x\",\"y\",\"z\",\"yawDeg\"]")
+    .Append(",\n\"worldPositions\":{");
+  for (int i = 0; i < bones.Count; i++) aj.Append(i == 0 ? "\n" : ",\n").Append(J(vrmName(bones[i]))).Append(":[").Append(pos[bones[i]]).Append("]");
+  aj.Append("},\n\"weapons\":[").Append(string.Join(",", wSpec.ToArray())).Append("]");
+  aj.Append(",\n\"weapon\":").Append(wSpec.Count > 0 ? wSpec[0] : "null");  // 舊格式：第一把
+  aj.Append(",\n\"weaponTrails\":[");
+  for (int k = 0; k < wT.Count; k++) aj.Append(k == 0 ? "" : ",").Append("{\"tip\":[").Append(wTipS[k]).Append("],\"base\":[").Append(wBaseS[k]).Append("]}");
+  aj.Append("]");
+  if (wT.Count > 0) aj.Append(",\n\"swordTip\":[").Append(wTipS[0]).Append("],\n\"swordPommel\":[").Append(wBaseS[0]).Append("]");  // 舊格式：第一把的軌跡
+  aj.Append("\n}\n");
+  System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "angles.json"), aj.ToString(), enc);
+
+  // ---------- analysis.json（逐格） ----------
+  var an = new System.Text.StringBuilder();
+  an.Append("{\n\"format\":\"motion-analysis/1\",\"id\":").Append(J(motionId)).Append(",\"character\":").Append(J(src.name)).Append(",\"frameRate\":").Append(F(fr)).Append(",\"frameCount\":").Append(N + 1);
+  an.Append(",\n\"conventions\":{\"angles\":\"度\",\"heights\":\"公尺\",\"axes\":\"以角色自己的前、上、右為準（原地，不含 Root 移動）\"")
+    .Append(",\"kneeFlex/elbowFlex\":\"0＝打直，越大越彎\",\"hipFlex/shoulderFlex\":\"正＝往前抬，負＝往後\",\"hipAbd/shoulderAbd\":\"正＝往外張\"")
+    .Append(",\"trunkLean\":\"正＝上身前傾\",\"trunkSide\":\"正＝上身往右傾\",\"pelvisYaw/chestYaw\":\"正＝往右轉（右邊往後）\",\"chestTwist\":\"胸口相對骨盆的扭轉，正＝胸口比骨盆更往右轉\"")
+    .Append(",\"pelvisTilt\":\"正＝右髖比左髖高\",\"headPitch\":\"正＝臉朝下\",\"headYaw\":\"正＝臉朝右\",\"footHeight/toeHeight\":\"相對 T-pose 站立時的高度，0＝踩在地上\"")
+    .Append(",\"stanceWidth\":\"右腳在左腳右邊多少\",\"stanceStride\":\"右腳在左腳前面多少\",\"handHeight\":\"手相對骨盆的高度\"},");
+  an.Append("\n\"jointAngles\":{");
+  for (int i = 0; i < angN.Length; i++) { an.Append(i == 0 ? "\n" : ",\n").Append(J(angN[i])).Append(":["); for (int f = 0; f <= N; f++) an.Append(f == 0 ? "" : ",").Append(float.IsNaN(ang[i, f]) ? "null" : F4((float)System.Math.Round(ang[i, f], 3))); an.Append("]"); }
+  an.Append("},\n\"footContacts\":{");
+  for (int side = 0; side < 2; side++) {
+    an.Append(side == 0 ? "\"left\":[" : ",\"right\":["); bool on = false; int start = 0; bool firstR = true;
+    for (int f = 0; f <= N + 1; f++) {
+      bool c = f <= N && Mathf.Min(ang[20 + side, f], float.IsNaN(ang[22 + side, f]) ? 9f : ang[22 + side, f]) < 0.015f;
+      if (c && !on) { on = true; start = f; } else if (!c && on) { on = false; if (f - start >= 2) { an.Append(firstR ? "" : ",").Append("[").Append(start).Append(",").Append(f - 1).Append("]"); firstR = false; } }
+    }
+    an.Append("]");
+  }
+  an.Append(",\"rule\":\"腳跟或腳尖離 T-pose 站立高度 1.5 cm 以內＝踩地，連續 2 格以上才算；數字是 [開始格, 結束格]；循環動作的最後一格＝第一格\"}");
+  an.Append(",\n\"muscles\":{");
+  bool firstM = true;
+  foreach (var b in human) {
+    var g = groupOf(b.propertyName); if (g != "muscle" && g != "fingerMuscle") continue;
+    var cv = AnimationUtility.GetEditorCurve(clip, b);
+    an.Append(firstM ? "\n" : ",\n").Append(J(b.propertyName)).Append(":["); firstM = false;
+    for (int f = 0; f <= N; f++) an.Append(f == 0 ? "" : ",").Append(F4((float)System.Math.Round(cv.Evaluate(f / fr), 4)));
+    an.Append("]");
+  }
+  an.Append("},\n\"muscleNote\":\"Unity Humanoid 肌肉值（各關節活動範圍的比例，-1～1），每格的值（跟 Unity 實際播放在整數格一樣）\"\n}\n");
+  System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "analysis.json"), an.ToString(), enc);
+  report = "playbackMode=" + mode + " (perCurve " + (errP[3] * 1000).ToString("G4") + " mm/" + errR[3].ToString("G4") + "° dense曲線" + denseCount + ", dense " + (errP[2] * 1000).ToString("G4") + " mm/" + errR[2].ToString("G4") + "°, curve " + (errP[1] * 1000).ToString("G4") + " mm/" + errR[1].ToString("G4") + "°) bones=" + bones.Count + " curves=" + human.Count + " frames=" + (N + 1) + " samples=" + (S + 1) + " rootEnd=" + rm.transform.position.ToString("F3") + " weapons=" + wT.Count + wMissing;
+} finally { foreach (var g in graphs) if (g.IsValid()) g.Destroy(); foreach (var m in made) if (m) UnityEngine.Object.DestroyImmediate(m); UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(scene); }
+log.Append(motionId).Append(": ").Append(report).Append("\n");
+}
+return log.ToString() + "time=" + timer.Elapsed.TotalSeconds.ToString("F1") + "s | active dirty=" + UnityEngine.SceneManagement.SceneManager.GetActiveScene().isDirty;
