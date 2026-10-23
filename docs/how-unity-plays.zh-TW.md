@@ -1,4 +1,4 @@
-[English](how-unity-plays.md) | **繁體中文** · [文件目錄](README.zh-TW.md)
+[English](how-unity-plays.md) | **繁體中文** · [文件索引](README.zh-TW.md)
 
 # Unity 實際怎麼播
 

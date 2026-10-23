@@ -1,10 +1,10 @@
-[English](unity-export.md) | **繁體中文** · [文件目錄](README.zh-TW.md)
+[English](unity-export.md) | **繁體中文** · [文件索引](README.zh-TW.md)
 
 # 從 Unity 匯出
 
 要 Unity 原生曲線（可以拿回 Unity 還原出一模一樣的動作）就從 Unity 匯出。網頁匯入的動作沒有這些曲線（見[匯入動作](importing.zh-TW.md)）。
 
-## 需要什麼
+## 需求
 
 - Unity 專案要有 UniVRM、Newtonsoft.Json（`com.unity.nuget.newtonsoft-json`）。`setup_weapons` 匯出 glb 還會用到 UniGLTF（UniVRM 裡有）。
 - [MCP for Unity](https://github.com/CoplayDev/unity-mcp)：腳本透過它的 `execute_code` 在編輯器裡跑，compiler 選 `codedom`。

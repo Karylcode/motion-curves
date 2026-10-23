@@ -1,4 +1,4 @@
-**English** | [繁體中文](install.zh-TW.md) · [Docs index](README.md)
+**English** | [繁體中文](installation.zh-TW.md) · [Documentation index](README.md)
 
 # Installation
 

@@ -1,8 +1,8 @@
-[English](development.md) | **繁體中文** · [文件目錄](README.zh-TW.md)
+[English](development.md) | **繁體中文** · [文件索引](README.zh-TW.md)
 
 # 開發
 
-環境：見[安裝](install.zh-TW.md)（Node.js 20.19 以上或 22.12 以上）。
+環境：見[安裝](installation.zh-TW.md)（Node.js 20.19 以上或 22.12 以上）。
 
 ## npm 指令
 

@@ -1,4 +1,4 @@
-**English** | [繁體中文](importing.zh-TW.md) · [Docs index](README.md)
+**English** | [繁體中文](importing.zh-TW.md) · [Documentation index](README.md)
 
 # Importing motions
 

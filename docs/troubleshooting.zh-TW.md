@@ -1,4 +1,4 @@
-[English](troubleshooting.md) | **繁體中文** · [文件目錄](README.zh-TW.md)
+[English](troubleshooting.md) | **繁體中文** · [文件索引](README.zh-TW.md)
 
 # 疑難排解
 

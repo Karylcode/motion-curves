@@ -1,4 +1,4 @@
-**English** | [繁體中文](how-unity-plays.zh-TW.md) · [Docs index](README.md)
+**English** | [繁體中文](how-unity-plays.zh-TW.md) · [Documentation index](README.md)
 
 # How Unity plays curves
 

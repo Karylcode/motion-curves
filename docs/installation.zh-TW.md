@@ -1,4 +1,4 @@
-[English](install.md) | **繁體中文** · [文件目錄](README.zh-TW.md)
+[English](installation.md) | **繁體中文** · [文件索引](README.zh-TW.md)
 
 # 安裝
 

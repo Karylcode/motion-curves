@@ -1,8 +1,8 @@
-**English** | [繁體中文](development.zh-TW.md) · [Docs index](README.md)
+**English** | [繁體中文](development.zh-TW.md) · [Documentation index](README.md)
 
 # Development
 
-Setup: see [Installation](install.md) (Node.js 20.19+ or 22.12+).
+Setup: see [Installation](installation.md) (Node.js 20.19+ or 22.12+).
 
 ## npm scripts
 

@@ -1,4 +1,4 @@
-**English** | [繁體中文](unity-export.zh-TW.md) · [Docs index](README.md)
+**English** | [繁體中文](unity-export.zh-TW.md) · [Documentation index](README.md)
 
 # Exporting from Unity
 

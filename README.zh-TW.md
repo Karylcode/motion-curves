@@ -1,20 +1,15 @@
 [English](README.md) | **繁體中文**
 
-# motion-curves
+# Motion Curves
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![three.js](https://img.shields.io/badge/three.js-0.180.0-black?logo=threedotjs)](https://threejs.org/)
-[![@pixiv/three-vrm](https://img.shields.io/badge/%40pixiv%2Fthree--vrm-3.4.2-blue)](https://github.com/pixiv/three-vrm)
-[![Vite](https://img.shields.io/badge/Vite-7.1.7-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
-[![Deploy Pages](https://github.com/Karylcode/motion-curves/actions/workflows/pages.yml/badge.svg)](https://github.com/Karylcode/motion-curves/actions/workflows/pages.yml)
+[![Pages](https://github.com/Karylcode/motion-curves/actions/workflows/pages.yml/badge.svg)](https://github.com/Karylcode/motion-curves/actions/workflows/pages.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node 20.19+](https://img.shields.io/badge/node-20.19%2B-blue.svg)](https://nodejs.org/)
+[![three.js 0.180.0](https://img.shields.io/badge/three.js-0.180.0-orange.svg)](https://threejs.org/)
 
-把人形動作變成看得懂、也讀得到的數據：在網頁上用 VRM 角色播放動作，旁邊畫出關節角度、Unity 肌肉曲線。每一格的數字都能下載，也能讓 AI 透過 `window.motionCurves` 直接在瀏覽器裡讀。
+把人形動作變成看得懂、也讀得到的數據：在網頁上用 VRM 角色播放動作，旁邊畫出關節角度、Unity 肌肉曲線。每一格的數字都能下載，也能讓 AI 透過 `window.motionCurves` 直接在瀏覽器裡讀。這個倉庫**不含任何動作**，只附一個角色（`AvatarSample_A.vrm`）。打開網頁後把自己的動作檔拖進去就能看。用 three.js、@pixiv/three-vrm、@pixiv/three-vrm-animation、Vite 做的。完整的 Unity 曲線要用 C# 腳本在 Unity 編輯器裡匯出。網頁介面是繁體中文。
 
-**線上試用：https://karylcode.github.io/motion-curves/**
-
-這個倉庫**不含任何動作**，只附一個角色（`AvatarSample_A.vrm`）。打開網頁後把自己的動作檔拖進去就能看。
-
-用 three.js、@pixiv/three-vrm、@pixiv/three-vrm-animation、Vite 做的。完整的 Unity 曲線要用 C# 腳本在 Unity 編輯器裡匯出。網頁介面是繁體中文。
+**線上試用：** https://karylcode.github.io/motion-curves/
 
 ## 可以做什麼
 
@@ -25,13 +20,13 @@
 - **換角色**：把 `.vrm` 拖進來就換成你的角色（VRM 1.0 和 0.x 都可以），下次打開還是它。
 - **給 AI**：`window.motionCurves` 可以拿任一條數據每一格的值、某一格全部的值、骨頭位置、截圖（`motionCurves.help()` 看全部）。
 
-## 需要什麼
+## 需求
 
 - 線上版：支援 WebGL 的瀏覽器，不用安裝。
 - 在自己電腦上跑：Node.js 20.19 以上或 22.12 以上，加上 npm。
 - 選用：Python 3＋numpy＋Pillow（命名工具）；Unity＋UniVRM＋Newtonsoft.Json＋MCP for Unity（完整的 Unity 匯出）。
 
-詳細：[安裝](docs/install.zh-TW.md)。
+詳細：[安裝](docs/installation.zh-TW.md)。
 
 ## 快速開始
 
@@ -48,9 +43,9 @@ npm run dev
 
 打開 http://127.0.0.1:5200/ 。Windows 也可以雙擊 `啟動網站.bat`。網址後面加 `#動作id` 會直接開那支動作。
 
-接著看：[使用方式](docs/usage.zh-TW.md)・[匯入動作](docs/importing.zh-TW.md)・[從 Unity 匯出](docs/unity-export.zh-TW.md)。
+接著看：[使用方式](docs/usage.zh-TW.md)。
 
-## 遇到問題
+## 疑難排解
 
 - **「FBX 骨頭名稱對不上」**：先轉成 VRMA，或改用 Mixamo、Unity Humanoid、UE 的骨頭名稱。
 - **兩個 Unity 分頁按不了**：網頁匯入的動作沒有 Unity 曲線，要從 Unity 匯出才有。
@@ -61,19 +56,19 @@ npm run dev
 
 ## 文件
 
-- [文件目錄](docs/README.zh-TW.md)
-- [安裝](docs/install.zh-TW.md)
+- [文件索引](docs/README.zh-TW.md)：所有頁面、從哪裡開始讀，以及 Unity 端的專案筆記
+- [安裝](docs/installation.zh-TW.md)：需求、在自己電腦上跑、選用工具
 - [使用方式](docs/usage.zh-TW.md)：播放、圖表、下載、`#id` 網址、`window.motionCurves`
 - [匯入動作](docs/importing.zh-TW.md)：拖進網頁、隱私、限制
 - [從 Unity 匯出](docs/unity-export.zh-TW.md)：Unity 流程和腳本
 - [資料格式](docs/data-format.zh-TW.md)：每支動作的三個 JSON
 - [Unity 實際怎麼播](docs/how-unity-plays.zh-TW.md)：dense 和 curve，以及怎麼驗證
 - [開發](docs/development.zh-TW.md)：npm 指令、打包、工具、程式結構
-- [疑難排解](docs/troubleshooting.zh-TW.md)
+- [疑難排解](docs/troubleshooting.zh-TW.md)：常見錯誤和處理方式
 
 ## 授權
 
-- 程式碼：[MIT](LICENSE)。
+MIT，詳見 [LICENSE](LICENSE)。
 - `public/models/AvatarSample_A.vrm`：用 VRoid Studio 做的角色，檔案裡的授權（[VRM Public License 1.0](https://vrm.dev/licenses/1.0/)）允許所有人使用、商用、再散布、改作後再散布，不用標示作者。
 - 用到 [three.js](https://threejs.org/)、[@pixiv/three-vrm](https://github.com/pixiv/three-vrm)（都是 MIT）。
 - 這個倉庫不含任何第三方動作或模型素材。用商城素材匯出的動作和武器模型不要放進公開倉庫（`.gitignore` 已經排除 `public/motions/` 和武器模型）。

@@ -1,12 +1,12 @@
-**English** | [繁體中文](README.zh-TW.md) · [Back to project README](../README.md)
+**English** | [繁體中文](README.zh-TW.md) · [Project README](../README.md)
 
-# motion-curves docs
+# Documentation
 
 If you only want to look at motions, start with **Usage** and **Importing motions**. If you want full Unity curves, read **Exporting from Unity**.
 
 | Doc | What's in it |
 |---|---|
-| [Installation](install.md) | Requirements, running locally, optional tools |
+| [Installation](installation.md) | Requirements, running locally, optional tools |
 | [Usage](usage.md) | Playback, views, chart tabs, the motion menu, downloads, `#id` URLs, `window.motionCurves` |
 | [Importing motions](importing.md) | Dragging in `.vrma`, `.fbx` and `.vrm`; where imported data is stored; limits |
 | [Exporting from Unity](unity-export.md) | The Unity workflow and the four `unity/*.cs.txt` scripts |
@@ -14,6 +14,8 @@ If you only want to look at motions, start with **Usage** and **Importing motion
 | [How Unity plays curves](how-unity-plays.md) | Dense vs curve playback, and the author's verification numbers |
 | [Development](development.md) | npm scripts, build outputs, data tools, naming tools, source layout |
 | [Troubleshooting](troubleshooting.md) | Common errors and what to do |
+
+## Project notes
 
 Unity-side reference (Chinese only):
 

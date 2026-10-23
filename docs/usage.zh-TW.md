@@ -1,4 +1,4 @@
-[English](usage.md) | **繁體中文** · [文件目錄](README.zh-TW.md)
+[English](usage.md) | **繁體中文** · [文件索引](README.zh-TW.md)
 
 # 使用方式
 
